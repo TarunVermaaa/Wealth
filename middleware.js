@@ -11,12 +11,10 @@ export default clerkMiddleware(async (auth, req) => {
   const { userId } = await auth();
 
   if (isProtectedRoute(req) && !userId) {
-
-    return  (await auth()).redirectToSignIn();
+    return (await auth()).redirectToSignIn();
   }
 
   return NextResponse.next();
-
 });
 
 export const config = {

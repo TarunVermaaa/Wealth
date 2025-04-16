@@ -18,9 +18,9 @@ const header = () => {
         <Link href="/">
           <Image
             src={"/logo.png"}
-            width={100}
-            height={100}
-            className="h-12 object-contain w-auto"
+            width={150}
+            height={150}
+            className="h-16 object-contain w-auto"
           />
         </Link>
 
