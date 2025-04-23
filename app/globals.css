@@ -137,4 +137,7 @@
   transform: rotateX(0deg) scale(1) translateY(40px) ;
 }
 
+.group:hover .account-actions {
+  opacity: 1;
+}
 
