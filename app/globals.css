@@ -141,3 +141,7 @@
   opacity: 1;
 }
 
+.transaction-table {
+  max-height: 500px;
+  overflow-y: auto;
+}
