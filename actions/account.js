@@ -1,4 +1,4 @@
-"use server"
+"use server";
 
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/prisma";
@@ -50,8 +50,7 @@ export async function updateDefaultAccount(accountId) {
   }
 }
 
-
-export async function getAccountsWithTransactions (accountId) {
+export async function getAccountsWithTransactions(accountId) {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
 
@@ -62,27 +61,85 @@ export async function getAccountsWithTransactions (accountId) {
   if (!user) {
     throw new Error("User not found");
   }
-  
+
   const account = await db.account.findUnique({
-    where: { id: accountId , userId : user.id},
+    where: { id: accountId, userId: user.id },
     include: {
       transactions: {
         orderBy: { date: "desc" },
       },
       _count: {
         select: { transactions: true },
+      },
+    },
+  });
+
+  if (!account) throw new Error("Account not found");
+
+  return {
+    success: true,
+    ...serializeTransaction(account),
+    transactions: account.transactions.map(serializeTransaction),
+  };
+}
+
+export async function bulkDeleteTransactions(transactionId ) {
+  try {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    const user = await db.user.findUnique({
+      where: { clerkUserId: userId },
+    });
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const transactions = await db.transaction.findMany({
+      where: {
+        id: { in: transactionId },
+        userId: user.id,
+      },
+    });
+
+    const accountBalanceChanges = transactions.reduce((acc, transaction) => {
+      const change =
+        transaction.type === "EXPENSE"
+          ? transaction.amount
+          : -transaction.amount;
+      acc[transaction.accountId] = (acc[transaction.accountId] || 0) + change;
+      return acc;
+    }, {});
+
+    // Delete the transaction and update the account balance
+    await db.$transaction(async (tx) => {
+      await tx.transaction.deleteMany({
+        where : {
+          id : { in : transactionId },
+          userId : user.id
+        }
+      })
+
+
+      for( const [accountId , balanceChange ] of  Object.entries(accountBalanceChanges)){
+        await tx.account.update({
+          where : {id : accountId},
+          data : {
+            balance: {
+              increment : balanceChange
+            }
+          }
+        })
       }
-    }
-  })
+    })
 
+    revalidatePath(`/account/${accountId}`)
 
-  if( !account) throw new Error("Account not found")
+    return { success : true }
 
-    return {
-      success: true ,
-      ...serializeTransaction(account),
-      transactions: account.transactions.map(serializeTransaction),
-    }
-
-
+  } catch (error) {
+    console.log(error);
+    return { success : false , error : error.message }
+  }
 }
