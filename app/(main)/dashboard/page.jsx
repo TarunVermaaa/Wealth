@@ -6,16 +6,21 @@ import React from "react";
 import AccountCard from "./_components/account-card";
 import { getCurrentBudget } from "@/actions/budget";
 import BudgetProgress from "./_components/budget-progress";
+import { toast } from "sonner";
 
 async function DashboardPage() {
   const response = await getUserAccounts();
 
   const defaultAccount = response.data.find((account) => account.isDefault);
+  console.log('Default account found:', defaultAccount);
 
   let budgetData = null;
 
   if (defaultAccount) {
+    // Make sure we're passing the correct accountId
+    console.log('Calling getCurrentBudget with accountId:', defaultAccount.id);
     budgetData = await getCurrentBudget(defaultAccount.id);
+    console.log('Budget data fetched:', budgetData);
   }
 
   if (!response.success || !response.data) {
@@ -29,7 +34,7 @@ async function DashboardPage() {
       {/* Budget progress */}
       {defaultAccount && (
         <BudgetProgress
-          initialBudget={budgetData?.budget?.amount  || 0}
+          initialBudget={budgetData?.budget}
           currentExpenses={budgetData?.currentExpenses || 0}
         />
       )}
