@@ -1,0 +1,145 @@
+"use server";
+
+import { db } from "@/lib/prisma";
+// Custom request object for our simplified Arcjet implementation
+import { auth } from "@clerk/nextjs/server";
+import { revalidatePath } from "next/cache";
+import aj from "@/lib/arcjet"
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+const serializeAmount = (obj) => {
+  return {
+    ...obj,
+    amount: obj.amount.toNumber(),
+  };
+};
+
+function calculateNextRecurringDate(startDate, interval) {
+  const date = new Date(startDate);
+  switch (interval) {
+    case "DAILY":
+      date.setDate(date.getDate() + 1);
+      break;
+    case "WEEKLY":
+      date.setDate(date.getDate() + 7);
+      break;
+    case "MONTHLY":
+      date.setMonth(date.getMonth() + 1);
+      break;
+    case "YEARLY":
+      date.setFullYear(date.getFullYear() + 1);
+      break;
+    default:
+      return null;
+  }
+  return date;
+}
+
+export async function createTransaction(transactionData) {
+  try {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    // Arcjet to add rate limiting
+    const req = {}; // Simple mock request object
+
+    // check rate limit
+    const decision = await aj.protect(req, {
+      userId,
+      requested: 1,
+    });
+
+    // check
+    if (decision.isDenied()) {
+      if (decision.reason && decision.reason.isRateLimit()) {
+        const { remaining, reset } = decision.reason;
+        console.error({
+          code: "RATE_LIMIT",
+          details: {
+            remaining,
+            resetInSecond: reset,
+          },
+        });
+
+        throw new Error("Rate limit exceeded");
+      }
+
+      throw new Error("Request denied")
+    }
+
+    const user = await db.user.findUnique({
+      where: { clerkUserId: userId },
+    });
+
+    if (!user) throw new Error("User not found");
+
+    const account = await db.account.findUnique({
+      where: {
+        id: transactionData.accountId,
+        userId: user.id,
+      },
+    });
+
+    if (!account) throw new Error("Account not found");
+
+    const balanceChange =
+      transactionData.type === "EXPENSE"
+        ? -transactionData.amount
+        : transactionData.amount;
+    const newbalance = account.balance.toNumber() + balanceChange;
+
+    const transaction = await db.$transaction(async (tx) => {
+      const newTransaction = await tx.transaction.create({
+        data: {
+          ...transactionData,
+          userId: user.id,
+          nextRecurringDate:
+            transactionData.isRecurring && transactionData.recurringInterval
+              ? calculateNextRecurringDate(
+                  transactionData.date,
+                  transactionData.recurringInterval
+                )
+              : null,
+        },
+      });
+
+      await tx.account.update({
+        where: {
+          id: transactionData.accountId,
+          userId: user.id,
+        },
+        data: {
+          balance: newbalance,
+        },
+      });
+
+      return newTransaction;
+    });
+
+    revalidatePath("/dashboard");
+    revalidatePath(`/account/${transactionData.accountId}`);
+
+    return {
+      success: true,
+      data: serializeAmount(transaction),
+    };
+  } catch (error) {
+    console.log(error);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+}
+
+
+export async function scanReceipt(file) {
+  try {
+    
+  } catch (error) {
+    
+  }
+}

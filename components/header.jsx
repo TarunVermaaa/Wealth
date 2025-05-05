@@ -44,7 +44,7 @@ const header = async () => {
 
           <SignedIn>
             <Link
-              href={"/dashboard"}
+              href={"/transaction/create"}
               className="text-gray-600 hover:text-blue-600 flex items-center gap-2"
             >
               <Button>
