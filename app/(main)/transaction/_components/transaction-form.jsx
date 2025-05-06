@@ -23,21 +23,11 @@ import {
 } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { format } from "date-fns";
-import { Calendar1Icon, Loader2Icon} from "lucide-react";
+import { Calendar1Icon, Loader2Icon, Receipt } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-
-function formatDateToISOString(date) {
-  if (!date) return "";
-  if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return new Date(date + "T00:00:00").toISOString();
-  }
-  if (date instanceof Date) {
-    return date.toISOString();
-  }
-  return date;
-}
+import ReceiptScanner from "./receipt-scanner";
 
 function TransactionForm({ accounts, categories }) {
   const router = useRouter();
@@ -45,7 +35,7 @@ function TransactionForm({ accounts, categories }) {
     register,
     setValue,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isSubmitting },
     watch,
     getValues,
     reset,
@@ -55,168 +45,208 @@ function TransactionForm({ accounts, categories }) {
       type: "EXPENSE",
       amount: "",
       description: "",
-      date: new Date().toISOString().split("T")[0],
-      accountId: accounts.find((acc) => acc.isDefault)?.id,
+      date: new Date().toISOString().split("T")[0], // ISO string as default
+      accountId: accounts.length > 0 ? (accounts.find((acc) => acc.isDefault)?.id || accounts[0].id) : "",
+      category: categories.filter(cat => cat.type === "EXPENSE").length > 0 ? 
+               categories.filter(cat => cat.type === "EXPENSE")[0].id : "",
       isRecurring: false,
     },
   });
 
-  const {
-    loading: transactionLoading,
-    fn: transactionFn,
-    data: transactionResult,
-    error: transactionError,
-  } = useFetch(createTransaction);
+  const { fn: transactionFn } = useFetch(createTransaction);
 
   const type = watch("type");
   const isRecurring = watch("isRecurring");
   const date = watch("date");
 
-  const FilteredCategories = categories.filter(
+  const filteredCategories = categories.filter(
     (category) => category.type === type
   );
+  
+  // Update category when type changes
+  useEffect(() => {
+    // If current category doesn't match the current type, reset it
+    const currentCategory = getValues("category");
+    const categoryExists = filteredCategories.some(cat => cat.id === currentCategory);
+    
+    if (!categoryExists && filteredCategories.length > 0) {
+      setValue("category", filteredCategories[0].id);
+    }
+  }, [type, filteredCategories, setValue, getValues]);
 
   const onSubmit = async (data) => {
-    const formData = {
-      ...data,
-      amount: parseFloat(data.amount),
-      date: formatDateToISOString(data.date),
-    };
-    await transactionFn(formData);
+    try {
+      // Make sure we have valid accountId and category
+      if (!data.accountId && accounts.length > 0) {
+        data.accountId = accounts[0].id;
+      }
+      
+      if (!data.category && filteredCategories.length > 0) {
+        data.category = filteredCategories[0].id;
+      }
+      
+      // Make sure date is in proper ISO format
+      const formatFullISODate = (dateString) => {
+        if (!dateString) return new Date().toISOString();
+        // If it's just a date (YYYY-MM-DD), add the time part
+        if (dateString.length === 10 && dateString.includes('-')) {
+          return new Date(`${dateString}T00:00:00.000Z`).toISOString();
+        }
+        // If it's already a full ISO date
+        if (dateString.includes('T')) {
+          return dateString;
+        }
+        // Otherwise try to parse it
+        return new Date(dateString).toISOString();
+      };
+      
+      // Format data for submission
+      const formData = {
+        ...data,
+        amount: parseFloat(data.amount),
+        date: formatFullISODate(data.date),
+      };
+      
+      console.log('Submitting form data:', formData);
+      
+      // Submit transaction
+      const result = await createTransaction(formData);
+      console.log('Transaction result:', result);
+      
+      if (result?.success) {
+        toast.success("Transaction created successfully");
+        reset();
+        
+        // Find accountId to redirect to
+        let redirectAccountId = accounts[0]?.id; // Default fallback
+        
+        if (result.data?.newTransaction?.accountId) {
+          redirectAccountId = result.data.newTransaction.accountId;
+        } else if (result.data?.accountId) {
+          redirectAccountId = result.data.accountId;
+        } else if (formData.accountId) {
+          redirectAccountId = formData.accountId;
+        }
+        
+        console.log('Redirecting to account:', redirectAccountId);
+        
+        // Use window.location for hard redirect instead of router
+        window.location.href = `/account/${redirectAccountId}`;
+      } else {
+        toast.error(result?.error || "Failed to create transaction");
+      }
+    } catch (error) {
+      console.error('Submission error:', error);
+      toast.error('Failed to create transaction');
+    }
   };
 
-  useEffect(() => {
-    if (transactionResult?.success && !transactionLoading) {
-      toast.success("Transaction created successfully");
-      reset();
-      router.push(`/account/${transactionResult.data.accountId}`);
+  const handleScanComplete = (scannedData) => {
+    if (scannedData) {
+      setValue("amount", scannedData.amount.toString());
+      setValue("date", scannedData.date); // Use string directly
+      
+      if (scannedData.description) {
+        setValue("description", scannedData.description);
+      }
+      if (scannedData.category) {
+        setValue("category", scannedData.category);
+      }
     }
-  }, [transactionResult, transactionLoading]);
+  };
 
   return (
     <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg">
       <form className="space-y-6" onSubmit={handleSubmit(onSubmit)}>
+        <ReceiptScanner onScanComplete={handleScanComplete} />
+
         {/* Transaction Type */}
         <div className="space-y-3">
           <label className="block text-sm font-semibold text-gray-700">
             Transaction Type
           </label>
           <Select
+            value={type}
             onValueChange={(value) => setValue("type", value)}
-            defaultValue={getValues("type")}
           >
-            <SelectTrigger className="h-12 rounded-lg border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
-              <SelectValue placeholder="Select Type" className="text-gray-600" />
+            <SelectTrigger className="h-12">
+              <SelectValue placeholder="Select Type" />
             </SelectTrigger>
-            <SelectContent className="rounded-lg shadow-lg">
-              <SelectItem value="EXPENSE" className="hover:bg-blue-50">
-                <span className="text-red-500">EXPENSE</span>
-              </SelectItem>
-              <SelectItem value="INCOME" className="hover:bg-blue-50">
-                <span className="text-green-500">INCOME</span>
-              </SelectItem>
+            <SelectContent>
+              <SelectItem value="EXPENSE">EXPENSE</SelectItem>
+              <SelectItem value="INCOME">INCOME</SelectItem>
             </SelectContent>
           </Select>
-          {transactionError?.type && (
-            <div className="flex items-center mt-1 text-red-600 text-sm">
-             
-              {transactionError?.type}
-            </div>
-          )}
         </div>
 
-        {/* Amount & Account Grid */}
+        {/* Amount & Account */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Amount Input */}
           <div className="space-y-3">
-            <label className="block text-sm font-semibold text-gray-700">
-              Amount
-            </label>
+            <label className="block text-sm font-semibold">Amount</label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
-                ₹
-              </span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2">₹</span>
               <Input
                 type="number"
                 step="0.01"
                 placeholder="0.00"
-                className="pl-8 h-12 rounded-lg border-gray-300 focus:ring-2 focus:ring-blue-500"
+                className="pl-8 h-12"
                 {...register("amount")}
               />
             </div>
-            {transactionError?.amount && (
-              <div className="flex items-center mt-1 text-red-600 text-sm">
-                {transactionError?.amount}
-              </div>
+            {errors.amount && (
+              <p className="text-red-500 text-sm">{errors.amount.message}</p>
             )}
           </div>
 
-          {/* Account Selection */}
           <div className="space-y-3">
-            <label className="block text-sm font-semibold text-gray-700">
-              Account
-            </label>
+            <label className="block text-sm font-semibold">Account</label>
             <Select
-              onValueChange={(value) => setValue("accountId", value)}
               defaultValue={getValues("accountId")}
+              onValueChange={(value) => {
+                console.log('Setting accountId:', value);
+                setValue("accountId", value);
+              }}
             >
-              <SelectTrigger className="h-12 rounded-lg border-gray-300 focus:ring-2 focus:ring-blue-500">
-                <SelectValue placeholder="Select Account" />
+              <SelectTrigger className="h-12">
+                <SelectValue />
               </SelectTrigger>
-              <SelectContent className="rounded-lg shadow-lg">
+              <SelectContent>
                 {accounts.map((account) => (
-                  <SelectItem
-                    key={account.id}
-                    value={account.id}
-                    className="group hover:bg-blue-50"
-                  >
-                    <div className="flex justify-between items-center w-full">
-                      <span>{account.name}{" "}</span>
-                      <span className="text-gray-500 text-sm">
-                        ₹{parseFloat(account.balance).toFixed(2)}
-                      </span>
+                  <SelectItem key={account.id} value={account.id}>
+                    <div className="flex justify-between w-full">
+                      <span>{account.name}</span>
+                      <span>₹{account.balance.toFixed(2)}</span>
                     </div>
                   </SelectItem>
                 ))}
                 <CreateAccountDrawer>
-                  <Button
-                    variant="ghost"
-                    className="w-full h-10 text-blue-600 hover:bg-blue-50 font-medium"
-                  >
+                  <Button variant="ghost" className="w-full">
                     + New Account
                   </Button>
                 </CreateAccountDrawer>
               </SelectContent>
             </Select>
-            {transactionError?.accountId && (
-              <div className="flex items-center mt-1 text-red-600 text-sm">
-                {transactionError?.accountId}
-              </div>
-            )}
           </div>
         </div>
 
-        {/* Category Selection */}
+        {/* Category */}
         <div className="space-y-3">
-          <label className="block text-sm font-semibold text-gray-700">
-            Category
-          </label>
+          <label className="block text-sm font-semibold">Category</label>
           <Select
-            onValueChange={(value) => setValue("category", value)}
             defaultValue={getValues("category")}
+            onValueChange={(value) => {
+              console.log('Setting category:', value);
+              setValue("category", value);
+            }}
           >
-            <SelectTrigger className="h-12 rounded-lg border-gray-300 focus:ring-2 focus:ring-blue-500">
-              <SelectValue placeholder="Select Category" />
+            <SelectTrigger className="h-12">
+              <SelectValue />
             </SelectTrigger>
-            <SelectContent className="rounded-lg shadow-lg">
-              {FilteredCategories.map((category) => (
-                <SelectItem
-                  key={category.id}
-                  value={category.id}
-                  className="hover:bg-blue-50"
-                >
+            <SelectContent>
+              {filteredCategories.map((category) => (
+                <SelectItem key={category.id} value={category.id}>
                   <div className="flex items-center">
-                    <div
+                    <div 
                       className="w-4 h-4 rounded-full mr-3"
                       style={{ backgroundColor: category.color }}
                     />
@@ -226,146 +256,78 @@ function TransactionForm({ accounts, categories }) {
               ))}
             </SelectContent>
           </Select>
-          {transactionError?.category && (
-            <div className="flex items-center mt-1 text-red-600 text-sm">
-              {transactionError?.category}
-            </div>
-          )}
         </div>
 
-        {/* Date & Recurring Grid */}
+        {/* Date & Recurring */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Date Picker */}
           <div className="space-y-3">
-            <label className="block text-sm font-semibold text-gray-700">
-              Date
-            </label>
+            <label className="block text-sm font-semibold">Date</label>
             <Popover>
               <PopoverTrigger asChild>
-                <Button
-                  variant={"outline"}
-                  className={
-                    "w-full h-12 pl-4 text-left font-normal rounded-lg border-gray-300 hover:bg-gray-50"
-                  }
-                >
-                  <Calendar1Icon className="mr-3 h-5 w-5 text-gray-500" />
-                  {date ? format(date, "PPP") : <span>Select date</span>}
+                <Button variant="outline" className="w-full h-12">
+                  <Calendar1Icon className="mr-3 h-5 w-5" />
+                  {date ? format(new Date(date), "PPP") : "Select date"}
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="rounded-lg shadow-lg">
+              <PopoverContent>
                 <Calendar
                   mode="single"
-                  selected={date}
-                  onSelect={(date) => setValue("date", date)}
-                  className="rounded-md"
-                  classNames={{
-                    day_selected: "bg-blue-500 hover:bg-blue-600",
+                  selected={date ? new Date(date) : undefined}
+                  onSelect={(date) => {
+                    if (date) {
+                      setValue("date", date.toISOString().split('T')[0]);
+                    }
                   }}
-                  disabled = { date => date < new Date("1900-01-01") || date > new Date() }
+                  disabled={(date) => date > new Date()}
                 />
               </PopoverContent>
             </Popover>
-            {transactionError?.date && (
-              <div className="flex items-center mt-1 text-red-600 text-sm">
-                {transactionError?.date}
-              </div>
-            )}
           </div>
 
-          {/* Recurring Toggle */}
           <div className="space-y-3">
-            <label className="block text-sm font-semibold text-gray-700">
-              Recurring
-            </label>
-            <div className="flex items-center h-12 px-4 rounded-lg border border-gray-300">
+            <label className="block text-sm font-semibold">Recurring</label>
+            <div className="flex items-center h-12 px-4 border rounded-lg">
               <Switch
                 checked={isRecurring}
                 onCheckedChange={(checked) => setValue("isRecurring", checked)}
-                className="data-[state=checked]:bg-blue-500"
               />
-              <span className="ml-3 text-sm text-gray-600">
-                {isRecurring ? "Recurring Transaction" : "One-time Transaction"}
+              <span className="ml-3">
+                {isRecurring ? "Recurring" : "One-time"}
               </span>
             </div>
           </div>
         </div>
 
-        {/* Recurring Interval */}
-        {isRecurring && (
-          <div className="space-y-3">
-            <label className="block text-sm font-semibold text-gray-700">
-              Recurring Interval
-            </label>
-            <Select
-              onValueChange={(value) => setValue("recurringInterval", value)}
-              defaultValue={getValues("recurringInterval")}
-            >
-              <SelectTrigger className="h-12 rounded-lg border-gray-300 focus:ring-2 focus:ring-blue-500">
-                <SelectValue placeholder="Select Interval" />
-              </SelectTrigger>
-              <SelectContent className="rounded-lg shadow-lg">
-                <SelectItem value="DAILY" className="hover:bg-blue-50">
-                  Daily
-                </SelectItem>
-                <SelectItem value="WEEKLY" className="hover:bg-blue-50">
-                  Weekly
-                </SelectItem>
-                <SelectItem value="MONTHLY" className="hover:bg-blue-50">
-                  Monthly
-                </SelectItem>
-                <SelectItem value="YEARLY" className="hover:bg-blue-50">
-                  Yearly
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            {transactionError?.recurringInterval && (
-              <div className="flex items-center mt-1 text-red-600 text-sm">
-                {transactionError?.recurringInterval}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Description */}
         <div className="space-y-3">
-          <label className="block text-sm font-semibold text-gray-700">
-            Description
-          </label>
+          <label className="block text-sm font-semibold">Description</label>
           <Input
             placeholder="Add note..."
-            className="h-12 rounded-lg border-gray-300 focus:ring-2 focus:ring-blue-500"
+            className="h-12"
             {...register("description")}
           />
-          {transactionError?.description && (
-            <div className="flex items-center mt-1 text-red-600 text-sm">
-              {transactionError?.description}
-            </div>
-          )}
         </div>
 
-        {/* Action Buttons */}
+        {/* Submit Buttons */}
         <div className="flex gap-4 pt-6">
           <Button
             variant="outline"
             type="button"
             onClick={() => router.back()}
-            className="h-12 flex-1 rounded-lg border-gray-300 hover:bg-gray-50 text-gray-700"
+            className="h-12 flex-1"
           >
             Cancel
           </Button>
-          <Button
-            type="submit"
-            disabled={transactionLoading}
-            className="h-12 flex-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-sm transition-colors duration-200"
+          <Button 
+            type="submit" 
+            disabled={isSubmitting}
+            onClick={handleSubmit(onSubmit)}
+            className="h-12 flex-1 bg-blue-600 hover:bg-blue-700"
           >
-            {transactionLoading ? (
-              <div className="flex items-center">
-                <Loader2Icon className="h-4 w-4 mr-2 animate-spin" />
-                Processing...
-              </div>
-            ) : (
-              "Add Transaction"
-            )}
+            {isSubmitting ? (
+              <Loader2Icon className="animate-spin mr-2" />
+            ) : null}
+            Add Transaction
           </Button>
         </div>
       </form>

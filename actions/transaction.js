@@ -4,9 +4,8 @@ import { db } from "@/lib/prisma";
 // Custom request object for our simplified Arcjet implementation
 import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
-import aj from "@/lib/arcjet"
+import aj from "@/lib/arcjet";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -67,7 +66,7 @@ export async function createTransaction(transactionData) {
         throw new Error("Rate limit exceeded");
       }
 
-      throw new Error("Request denied")
+      throw new Error("Request denied");
     }
 
     const user = await db.user.findUnique({
@@ -116,7 +115,9 @@ export async function createTransaction(transactionData) {
         },
       });
 
-      return newTransaction;
+      return {
+        newTransaction,
+      };
     });
 
     revalidatePath("/dashboard");
@@ -124,7 +125,7 @@ export async function createTransaction(transactionData) {
 
     return {
       success: true,
-      data: serializeAmount(transaction),
+      data: transaction,
     };
   } catch (error) {
     console.log(error);
@@ -135,11 +136,66 @@ export async function createTransaction(transactionData) {
   }
 }
 
-
 export async function scanReceipt(file) {
   try {
-    
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+    // convert file to ArrayBuffer
+    const arrayBuffer = await file.arrayBuffer();
+
+    // convert ArrayBuffer to base64
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+    // giving prompt
+    const prompt = ` Analyze this receipt image and extract the following information in JSON format:
+      - Total amount (just the number)
+      - Date (in ISO format)
+      - Description or items purchased (brief summary)
+      - Merchant/store name
+      - Suggested category (one of: housing,transportation,groceries,utilities,entertainment,food,shopping,healthcare,education,personal,travel,insurance,gifts,bills,other-expense )
+      
+      Only respond with valid JSON in this exact format:
+      {
+        "amount": number,
+        "date": "ISO date string",
+        "description": "string",
+        "merchantName": "string",
+        "category": "string"
+      }
+
+      If its not a recipt, return an empty object
+    `;
+
+    // result
+    const result = await model.generateContent([
+      {
+        inlineData: {
+          data: base64,
+          mimeType: file.type,
+        },
+      },
+      prompt,
+    ]);
+
+    const response = await result.response;
+    const text = await response.text();
+    const cleanText = text.replace(/```(?:json)?\n?/g, "").trim();
+
+    try {
+      const data = JSON.parse(cleanText);
+      return {
+        amount: parseFloat(data.amount),
+        date: new Date(data.date),
+        description: data.description,
+        merchantName: data.merchantName,
+        category: data.category,
+      };
+    } catch (parsedError) {
+      console.log("Error parsing JSON response", parsedError);
+      throw new Error("Invalid response Format from Gemini");
+    }
   } catch (error) {
-    
+    console.log(error.message);
+    throw new Error("Failed to process receipt");
   }
 }
