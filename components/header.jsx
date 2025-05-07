@@ -16,8 +16,6 @@ const header = async () => {
 
   await checkUser()
 
-
-
   return (
     <div className="fixed top-0 w-full bg-white/80 backdrop-blur-sm z-50 border-b ">
       <nav className="container mx-auto px-4 flex items-center justify-between ">
@@ -26,7 +24,7 @@ const header = async () => {
             src={WealthLogo}
             width={200}
             height={200}
-            className="h-25 object-contain w-auto"
+            className="h-25 object-contain w-auto"  
           />
         </Link>
 
