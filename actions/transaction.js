@@ -199,3 +199,117 @@ export async function scanReceipt(file) {
     throw new Error("Failed to process receipt");
   }
 }
+
+export async function getTransactions(id) {
+  try {
+    const { userId } = await auth();
+
+    if (!userId) throw new Error("Unauthorized");
+
+    const user = await db.user.findUnique({
+      where: {
+        clerkUserId: userId,
+      },
+    });
+
+    if (!user) throw new Error("User not found");
+
+    const transaction = await db.transaction.findUnique({
+      where: {
+        id,
+        userId: user.id,
+      },
+    });
+
+    if (!transaction) throw new Error("Transaction not found");
+
+    // Return with success flag and data format like other actions
+    return {
+      success: true,
+      data: serializeAmount(transaction)
+    };
+  } catch (error) {
+    console.error('Error fetching transaction:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+export async function updateTransaction(id, data) {
+  const { userId } = await auth();
+
+  if (!userId) throw new Error("Unauthorized");
+
+  const user = await db.user.findUnique({
+    where: {
+      clerkUserId: userId,
+    },
+  });
+
+  if (!user) throw new Error("User not found");
+
+  // Get orignal transaction to calculate balance change
+  const originalTransaction = await db.transaction.findUnique({
+    where: {
+      id,
+      userId: user.id,
+    },
+    include: {
+      account: true,
+    },
+  });
+
+  if (!originalTransaction) throw new Error("Transaction not found");
+
+  // calculate balance change
+  const oldBalanceChange =
+    originalTransaction.type === "EXPENSE"
+      ? -originalTransaction.amount
+      : originalTransaction.amount;
+
+  const newBalanceChange =
+    data.type === "EXPENSE" ? -data.amount : data.amount;
+
+  const balanceChange = newBalanceChange - oldBalanceChange;
+
+  // update account balance  and transaction in a transaction
+
+  const transaction = await db.$transaction(async (tx) => {
+    const updated = await tx.transaction.update({
+      where: {
+        id,
+        userId: user.id,
+      },
+      data: {
+        ...data,
+        nextRecurringDate:
+          data.isRecurring && data.recurringInterval
+            ? calculateNextRecurringDate(data.date, data.recurringInterval)
+            : null,
+      },
+    });
+
+    // update account balance
+
+    await tx.account.update({
+      where: { id: data.accountId },
+      data: {
+        balance: {
+          increment: balanceChange,
+        },
+      },
+    });
+
+    return updated;
+  });
+
+  revalidatePath("/dashboard");
+  revalidatePath(`/account/${data.accountId}`);
+
+  return {
+    success: true,
+    data: serializeAmount(transaction),
+  };
+}

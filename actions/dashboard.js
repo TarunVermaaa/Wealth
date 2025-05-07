@@ -10,6 +10,11 @@ const serializeAccount = (account) => ({
   balance: account.balance.toNumber(),
 });
 
+const serializeTransaction = (transaction) => ({
+  ...transaction,
+  amount: transaction.amount.toNumber(),
+});
+
 export async function getUserAccounts() {
   try {
     const { userId } = await auth();
@@ -91,3 +96,23 @@ export async function createAccount(data) {
 }
 
 
+export async function getDashboardData() { 
+  const { userId } = await auth();
+
+  if (!userId) throw new Error("Unauthorized");
+
+  const user = await db.user.findUnique({
+    where: { clerkUserId: userId },
+  });
+
+  if (!user) throw new Error("User not found");
+
+  // get all user transaction 
+  const transactions = await db.transaction.findMany({
+    where : {userId : user.id} ,
+    orderBy : { date : "desc"},
+    }
+  )
+
+  return transactions.map((transaction) => serializeTransaction(transaction))
+}

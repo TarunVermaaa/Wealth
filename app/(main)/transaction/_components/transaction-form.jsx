@@ -1,6 +1,7 @@
 "use client";
 
 import { createTransaction } from "@/actions/transaction";
+import { updateTransaction } from "@/actions/transaction";
 import { transactionSchema } from "@/app/lib/schema";
 import useFetch from "@/hooks/use-fetch";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -25,12 +26,21 @@ import { Calendar } from "@/components/ui/calendar";
 import { format } from "date-fns";
 import { Calendar1Icon, Loader2Icon, Receipt } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import ReceiptScanner from "./receipt-scanner";
 
-function TransactionForm({ accounts, categories }) {
+function TransactionForm({
+  accounts,
+  categories,
+  editMode = false,
+  initialData = null,
+}) {
   const router = useRouter();
+
+  const searchParams = useSearchParams();
+  const editId = searchParams.get("edit");
+
   const {
     register,
     setValue,
@@ -41,19 +51,43 @@ function TransactionForm({ accounts, categories }) {
     reset,
   } = useForm({
     resolver: zodResolver(transactionSchema),
-    defaultValues: {
-      type: "EXPENSE",
-      amount: "",
-      description: "",
-      date: new Date().toISOString().split("T")[0], // ISO string as default
-      accountId: accounts.length > 0 ? (accounts.find((acc) => acc.isDefault)?.id || accounts[0].id) : "",
-      category: categories.filter(cat => cat.type === "EXPENSE").length > 0 ? 
-               categories.filter(cat => cat.type === "EXPENSE")[0].id : "",
-      isRecurring: false,
-    },
+    defaultValues:
+      editMode && initialData
+        ? {
+            type: initialData.type,
+            amount: initialData.amount.toString(),
+            description: initialData.description,
+            date: initialData.date.toISOString().split("T")[0],
+            accountId: initialData.accountId,
+            category: initialData.category,
+            isRecurring: initialData.isRecurring,
+            ...(initialData.recurringInterval && {
+              recurringInterval: initialData.recurringInterval,
+            }),
+          }
+        : {
+            type: "EXPENSE",
+            amount: "",
+            description: "",
+            date: new Date().toISOString().split("T")[0], // ISO string as default
+            accountId:
+              accounts.length > 0
+                ? accounts.find((acc) => acc.isDefault)?.id || accounts[0].id
+                : "",
+            category:
+              categories.filter((cat) => cat.type === "EXPENSE").length > 0
+                ? categories.filter((cat) => cat.type === "EXPENSE")[0].id
+                : "",
+            isRecurring: false,
+          },
   });
 
-  const { fn: transactionFn } = useFetch(createTransaction);
+  const {
+    fn: transactionFn,
+    loading: transactionLoading,
+    data: transactionResult,
+    error: transactionError,
+  } = useFetch(editMode ? updateTransaction : createTransaction);
 
   const type = watch("type");
   const isRecurring = watch("isRecurring");
@@ -62,90 +96,120 @@ function TransactionForm({ accounts, categories }) {
   const filteredCategories = categories.filter(
     (category) => category.type === type
   );
-  
+
   // Update category when type changes
   useEffect(() => {
     // If current category doesn't match the current type, reset it
     const currentCategory = getValues("category");
-    const categoryExists = filteredCategories.some(cat => cat.id === currentCategory);
-    
+    const categoryExists = filteredCategories.some(
+      (cat) => cat.id === currentCategory
+    );
+
     if (!categoryExists && filteredCategories.length > 0) {
       setValue("category", filteredCategories[0].id);
     }
   }, [type, filteredCategories, setValue, getValues]);
 
-  const onSubmit = async (data) => {
+  // Format date for ISO
+  const formatDateForISO = (dateString) => {
+    if (!dateString) return new Date().toISOString();
+    
+    // If just date string (YYYY-MM-DD), add time component
+    if (dateString.length === 10 && dateString.includes('-')) {
+      return `${dateString}T00:00:00.000Z`;
+    }
+    
+    // Already has time component
+    if (dateString.includes('T')) {
+      return dateString;
+    }
+    
+    // Try to parse as date
     try {
-      // Make sure we have valid accountId and category
-      if (!data.accountId && accounts.length > 0) {
-        data.accountId = accounts[0].id;
+      return new Date(dateString).toISOString();
+    } catch (e) {
+      console.error('Error formatting date:', e);
+      return new Date().toISOString();
+    }
+  };
+
+  const onSubmit = async (formData) => {
+    try {
+      // Make sure we have required fields
+      if (!formData.accountId && accounts.length > 0) {
+        formData.accountId = accounts[0].id;
       }
-      
-      if (!data.category && filteredCategories.length > 0) {
-        data.category = filteredCategories[0].id;
+
+      if (!formData.category && filteredCategories.length > 0) {
+        formData.category = filteredCategories[0].id;
       }
-      
-      // Make sure date is in proper ISO format
-      const formatFullISODate = (dateString) => {
-        if (!dateString) return new Date().toISOString();
-        // If it's just a date (YYYY-MM-DD), add the time part
-        if (dateString.length === 10 && dateString.includes('-')) {
-          return new Date(`${dateString}T00:00:00.000Z`).toISOString();
-        }
-        // If it's already a full ISO date
-        if (dateString.includes('T')) {
-          return dateString;
-        }
-        // Otherwise try to parse it
-        return new Date(dateString).toISOString();
+
+      // Format the data properly
+      const finalFormData = {
+        ...formData,
+        amount: parseFloat(formData.amount),
+        date: formatDateForISO(formData.date),
       };
       
-      // Format data for submission
-      const formData = {
-        ...data,
-        amount: parseFloat(data.amount),
-        date: formatFullISODate(data.date),
-      };
+      console.log('Submitting transaction...', finalFormData);
       
-      console.log('Submitting form data:', formData);
+      // Direct server action calls
+      let result;
       
-      // Submit transaction
-      const result = await createTransaction(formData);
-      console.log('Transaction result:', result);
-      
-      if (result?.success) {
-        toast.success("Transaction created successfully");
-        reset();
-        
-        // Find accountId to redirect to
-        let redirectAccountId = accounts[0]?.id; // Default fallback
-        
-        if (result.data?.newTransaction?.accountId) {
-          redirectAccountId = result.data.newTransaction.accountId;
-        } else if (result.data?.accountId) {
-          redirectAccountId = result.data.accountId;
-        } else if (formData.accountId) {
-          redirectAccountId = formData.accountId;
-        }
-        
-        console.log('Redirecting to account:', redirectAccountId);
-        
-        // Use window.location for hard redirect instead of router
-        window.location.href = `/account/${redirectAccountId}`;
+      if (editId) {
+        // Update transaction
+        console.log('Updating transaction:', editId);
+        result = await updateTransaction(editId, finalFormData);
       } else {
-        toast.error(result?.error || "Failed to create transaction");
+        // Create new transaction
+        console.log('Creating new transaction');
+        result = await createTransaction(finalFormData);
+      }
+      
+      console.log('Server response:', result);
+      
+      if (result && result.success) {
+        toast.success(editId ? 'Transaction updated!' : 'Transaction created!');
+        
+        // Get account ID to redirect to
+        let accountId = finalFormData.accountId;
+        
+        if (result.data?.accountId) {
+          accountId = result.data.accountId;
+        } else if (result.data?.newTransaction?.accountId) {
+          accountId = result.data.newTransaction.accountId;
+        }
+        
+        console.log('Redirecting to account:', accountId);
+        
+        // Instead of router.push, use window.location for reliable redirect
+        setTimeout(() => {
+          window.location.href = `/account/${accountId}`;
+        }, 500);
+      } else {
+        // Handle error
+        const errorMessage = result?.error || 'Failed to process transaction';
+        console.error('Transaction error:', errorMessage);
+        toast.error(errorMessage);
       }
     } catch (error) {
-      console.error('Submission error:', error);
-      toast.error('Failed to create transaction');
+      console.error('Form submission error:', error);
+      toast.error('An unexpected error occurred');
     }
   };
 
   const handleScanComplete = (scannedData) => {
     if (scannedData) {
       setValue("amount", scannedData.amount.toString());
-      setValue("date", scannedData.date); // Use string directly
-      
+      if (scannedData.date) {
+        // Ensure date is in YYYY-MM-DD format for the form
+        const dateObj = new Date(scannedData.date);
+        const yyyy = dateObj.getFullYear();
+        const mm = String(dateObj.getMonth() + 1).padStart(2, "0");
+        const dd = String(dateObj.getDate()).padStart(2, "0");
+        setValue("date", `${yyyy}-${mm}-${dd}`);
+      }
+
       if (scannedData.description) {
         setValue("description", scannedData.description);
       }
@@ -158,7 +222,7 @@ function TransactionForm({ accounts, categories }) {
   return (
     <div className="max-w-2xl mx-auto p-6 bg-white rounded-xl shadow-lg">
       <form className="space-y-6" onSubmit={handleSubmit(onSubmit)}>
-        <ReceiptScanner onScanComplete={handleScanComplete} />
+        {!editMode &&   <ReceiptScanner onScanComplete={handleScanComplete} />}
 
         {/* Transaction Type */}
         <div className="space-y-3">
@@ -184,7 +248,9 @@ function TransactionForm({ accounts, categories }) {
           <div className="space-y-3">
             <label className="block text-sm font-semibold">Amount</label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2">₹</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2">
+                ₹
+              </span>
               <Input
                 type="number"
                 step="0.01"
@@ -203,7 +269,7 @@ function TransactionForm({ accounts, categories }) {
             <Select
               defaultValue={getValues("accountId")}
               onValueChange={(value) => {
-                console.log('Setting accountId:', value);
+                console.log("Setting accountId:", value);
                 setValue("accountId", value);
               }}
             >
@@ -235,7 +301,7 @@ function TransactionForm({ accounts, categories }) {
           <Select
             defaultValue={getValues("category")}
             onValueChange={(value) => {
-              console.log('Setting category:', value);
+              console.log("Setting category:", value);
               setValue("category", value);
             }}
           >
@@ -246,7 +312,7 @@ function TransactionForm({ accounts, categories }) {
               {filteredCategories.map((category) => (
                 <SelectItem key={category.id} value={category.id}>
                   <div className="flex items-center">
-                    <div 
+                    <div
                       className="w-4 h-4 rounded-full mr-3"
                       style={{ backgroundColor: category.color }}
                     />
@@ -275,7 +341,7 @@ function TransactionForm({ accounts, categories }) {
                   selected={date ? new Date(date) : undefined}
                   onSelect={(date) => {
                     if (date) {
-                      setValue("date", date.toISOString().split('T')[0]);
+                      setValue("date", date.toISOString().split("T")[0]);
                     }
                   }}
                   disabled={(date) => date > new Date()}
@@ -318,16 +384,16 @@ function TransactionForm({ accounts, categories }) {
           >
             Cancel
           </Button>
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
+            onClick={ handleSubmit(onSubmit) }
             disabled={isSubmitting}
-            onClick={handleSubmit(onSubmit)}
             className="h-12 flex-1 bg-blue-600 hover:bg-blue-700"
           >
             {isSubmitting ? (
-              <Loader2Icon className="animate-spin mr-2" />
+              <Loader2Icon className="animate-spin mr-2" /> 
             ) : null}
-            Add Transaction
+            {editMode ? "Update Transaction" : "Add Transaction"}
           </Button>
         </div>
       </form>

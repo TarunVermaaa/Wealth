@@ -11,6 +11,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { LayoutDashboard, PenBox } from "lucide-react";
 import { checkUser } from "@/lib/checkUser";
+import WealthLogo from "@/public/Wealth1.png";
 const header = async () => {
 
   await checkUser()
@@ -22,10 +23,10 @@ const header = async () => {
       <nav className="container mx-auto px-4 flex items-center justify-between ">
         <Link href="/">
           <Image
-            src={"/logo.png"}
-            width={150}
-            height={150}
-            className="h-16 object-contain w-auto"
+            src={WealthLogo}
+            width={200}
+            height={200}
+            className="h-25 object-contain w-auto"
           />
         </Link>
 
