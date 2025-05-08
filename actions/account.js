@@ -3,6 +3,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { syncUserWithDB } from "@/lib/syncUser";
 
 const serializeTransaction = (obj) => {
   const serialized = { ...obj };
@@ -19,6 +20,7 @@ const serializeTransaction = (obj) => {
 };
 
 export async function updateDefaultAccount(accountId) {
+  await syncUserWithDB();
   try {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
@@ -51,6 +53,7 @@ export async function updateDefaultAccount(accountId) {
 }
 
 export async function getAccountsWithTransactions(accountId) {
+  await syncUserWithDB();
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
 
@@ -84,6 +87,7 @@ export async function getAccountsWithTransactions(accountId) {
 }
 
 export async function bulkDeleteTransactions(transactionId ) {
+  await syncUserWithDB();
   try {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");

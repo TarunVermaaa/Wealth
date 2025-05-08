@@ -3,8 +3,10 @@
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { syncUserWithDB } from "@/lib/syncUser";
 
 export async function getCurrentBudget(accountId) {
+  await syncUserWithDB();
   try {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
@@ -97,6 +99,7 @@ export async function getCurrentBudget(accountId) {
 }
 
 export async function updateBudget(amount) {
+  await syncUserWithDB();
   try {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");

@@ -6,6 +6,7 @@ import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import aj from "@/lib/arcjet";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { syncUserWithDB } from "@/lib/syncUser";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -38,6 +39,7 @@ function calculateNextRecurringDate(startDate, interval) {
 }
 
 export async function createTransaction(transactionData) {
+  await syncUserWithDB();
   try {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
@@ -201,6 +203,7 @@ export async function scanReceipt(file) {
 }
 
 export async function getTransactions(id) {
+  await syncUserWithDB();
   try {
     const { userId } = await auth();
 
@@ -238,6 +241,7 @@ export async function getTransactions(id) {
 }
 
 export async function updateTransaction(id, data) {
+  await syncUserWithDB();
   const { userId } = await auth();
 
   if (!userId) throw new Error("Unauthorized");

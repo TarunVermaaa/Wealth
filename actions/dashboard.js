@@ -3,11 +3,12 @@
 import { db } from "@/lib/prisma";
 import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
+import { syncUserWithDB } from "@/lib/syncUser";
 
 // Helper to serialize Decimal fields
 const serializeAccount = (account) => ({
   ...account,
-  balance: account.balance.toNumber(),
+  balance: account.balance.toNumber(),  
 });
 
 const serializeTransaction = (transaction) => ({
@@ -16,6 +17,7 @@ const serializeTransaction = (transaction) => ({
 });
 
 export async function getUserAccounts() {
+  await syncUserWithDB();
   try {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
@@ -50,6 +52,7 @@ export async function getUserAccounts() {
 }
 
 export async function createAccount(data) {
+  await syncUserWithDB();
   try {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
@@ -97,6 +100,7 @@ export async function createAccount(data) {
 
 
 export async function getDashboardData() { 
+  await syncUserWithDB();
   const { userId } = await auth();
 
   if (!userId) throw new Error("Unauthorized");
